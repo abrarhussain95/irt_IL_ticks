@@ -36,6 +36,55 @@ library("tidyverse")
 ```
 
 
+**Helper function for computing errors**
+```{r, message=FALSE, warning=FALSE} 
+
+extract_fit_stats <- function(group, rasch_mod, pl2_mod, pl3_mod, selected_model){
+  data.frame(
+    Group = group,
+    Model = c("Rasch", "2PL", "3PL"),
+    LogLik = c(as.numeric(logLik(rasch_mod)),
+               as.numeric(logLik(pl2_mod)),
+               as.numeric(logLik(pl3_mod))),
+    AIC = c(AIC(rasch_mod), AIC(pl2_mod), AIC(pl3_mod)),
+    BIC = c(BIC(rasch_mod), BIC(pl2_mod), BIC(pl3_mod)),
+    Selected = c(selected_model == "Rasch",
+                 selected_model == "2PL",
+                 selected_model == "3PL")
+  )
+}
+
+extract_param_table <- function(model, group, model_name){
+  out <- tryCatch({
+    sm <- summary(model)
+    tab <- as.data.frame(sm$coefficients)
+    tab$Item <- rownames(tab)
+    rownames(tab) <- NULL
+    tab$Group <- group
+    tab$Selected_Model <- model_name
+    tab <- tab[, c("Group", "Selected_Model", "Item",
+                   setdiff(names(tab), c("Group", "Selected_Model", "Item")))]
+    tab
+  }, error = function(e) {
+    cf <- as.data.frame(coef(model))
+    cf$Item <- rownames(cf)
+    rownames(cf) <- NULL
+    cf$Group <- group
+    cf$Selected_Model <- model_name
+    cf$SE_note <- "Standard errors could not be computed due to a singular information matrix."
+    cf <- cf[, c("Group", "Selected_Model", "Item",
+                 setdiff(names(cf), c("Group", "Selected_Model", "Item")))]
+    cf
+  })
+  out
+}
+
+all_fit_tables <- list()
+all_param_tables <- list()
+
+```
+
+
 **Public Health Professionals**
 ```{r, message=FALSE, warning=FALSE} 
 
@@ -45,17 +94,17 @@ kap_ph <- read.csv("C:/Users/abrar/OneDrive - University of Illinois - Urbana/Do
 
 # Rename columns for easier access
 names(kap_ph)[1] <- "Pin"  # Assuming column 1 is the unique ID
-names(kap_ph)[2:6] <- paste0("Q", 1:5)  # Assuming Q1–Q5 are columns 2-6
+names(kap_ph)[2:5] <- paste0("Q", 1:4)  # Assuming Q1–Q4 are columns 2-6
 
 # Scoring logic
 kap_ph$s1 <- ifelse(grepl("hair|arms|belly|groin", kap_ph$Q1, ignore.case = TRUE), 1, 0)
 kap_ph$s2 <- ifelse(grepl("yes", kap_ph$Q2, ignore.case = TRUE), 1, 0)
 kap_ph$s3 <- ifelse(grepl("yes", kap_ph$Q3, ignore.case = TRUE), 1, 0)
 kap_ph$s4 <- ifelse(grepl("concerned|very concerned", kap_ph$Q4, ignore.case = TRUE), 1, 0)
-kap_ph$s5 <- ifelse(grepl("yes", kap_ph$Q5, ignore.case = TRUE), 1, 0)
+
 
 # Total score (summing binary scores)
-kap_ph$score_total <- rowSums(kap_ph[, paste0("s", 1:5)])
+kap_ph$score_total <- rowSums(kap_ph[, paste0("s", 1:4)])
 
 #Set directory to save all outputs
 setwd("C:/Users/abrar/OneDrive - University of Illinois - Urbana/Documents/IRT Output")
@@ -69,7 +118,7 @@ write.csv(kap_ph, "kap_ph_IRTScored.csv", row.names = FALSE)
 ##Getting beta values from Rasch model (simple) to asses the difficulty of questions
 
 #select only cleaned answers for analysis
-kap_ph_irt=dplyr::select(kap_ph,s1,s2,s3,s4,s5)
+kap_ph_irt=dplyr::select(kap_ph,s1,s2,s3,s4)
 
 # Fit Rasch Model (The Rasch model is a type of Item Response Theory (IRT) model — specifically, the 1-Parameter Logistic (1PL) model)
 kap_ph_rm = RM(kap_ph_irt)
@@ -78,17 +127,13 @@ kap_ph_rm = RM(kap_ph_irt)
 betas_kap_ph <- -coef(kap_ph_rm)
 round(sort(betas_kap_ph), 2)
 
-# Check if any betas are identical (could cause overlapping ICCs)
-# Interpretation:
-# - Items with lower beta values are easier (e.g., s3)
-# - Items with higher beta values are harder (e.g., s5)
-# - Items with similar beta values (s2 & s4) have similar difficulty levels
+
 
 #_____
 
 # Function to normalize a vector between 0 and 1
 normalize <- function(x) {
-  return((x - min(x)) / (max(x) - min(x)))
+  return(0.1 + (x - min(x)) * (0.99 - 0.1) / (max(x) - min(x)))
 }
 
 # Normalizing
@@ -153,10 +198,6 @@ bic_values_ph <- c(
 print(aic_values_ph)
 print(bic_values_ph)
 
-# Interpretation:
-# - AIC favors the **2PL model**, suggesting it fits the data best with a good balance of fit and complexity.
-# - BIC favors the **Rasch model**, indicating it provides a more parsimonious fit after penalizing for extra parameters.
-# - In contexts where model simplicity is preferred (e.g., psychometric testing), the Rasch model may still be appropriate.
 
 
 # Compare estimated item difficulty parameters across models
@@ -169,17 +210,26 @@ cat("Correlation between 2PL and 3PL item difficulties for ph:", round(cor_2pl_3
 cat("Correlation between Rasch and 3PL item difficulties for ph:", round(cor_rasch_3pl_ph, 2), "\n")
 
 
-# Correlation between item difficulties from different models (ph group):
-# - Rasch vs 2PL: 0.99 → Very strong agreement
-# - 2PL vs 3PL: 0.42 → Moderate agreement
-# - Rasch vs 3PL: 0.28 → Weak agreement
-#
-# Interpretation:
-# - Rasch and 2PL produce very similar item difficulty estimates.
-# - 3PL diverges more due to its complexity and the added guessing parameter.
-# - The Rasch model is appropriate here for its simplicity and strong alignment with 2PL.
 
 #_____
+
+
+##supplementary outputs: public health professionals##
+all_fit_tables[["PH"]] <- extract_fit_stats(
+  group = "Public health professionals",
+  rasch_mod = kap_ph_rasch,
+  pl2_mod = kap_ph_2pl,
+  pl3_mod = kap_ph_3pl,
+  selected_model = "Rasch"
+)
+
+all_param_tables[["PH"]] <- extract_param_table(
+  model = kap_ph_rasch,
+  group = "Public health professionals",
+  model_name = "Rasch"
+)
+
+#___
 
 ##Item Analysis & Visualization
 
@@ -225,7 +275,7 @@ ggsave("kap_ph_ICC_plot.png", width = 10, height = 6, dpi = 300)
 #
 # - The steepest point of each curve indicates where the item is most informative 
 #   (i.e., the difficulty level of the item)
-# - If a curve is shifted to the right → the item is harder (e.g., beta s5)
+# - If a curve is shifted to the right → the item is harder
 # - If a curve is shifted to the left → the item is easier (e.g., beta s3)
 
 
@@ -350,8 +400,8 @@ lower_group_ph <- kap_ph[kap_ph$score_total <= lower_threshold_ph, ]
 
 
 # Calculate proportions of correct answers for selected items (s1, s3, s4)
-upper_correct_ph <- colMeans(upper_group_ph[, c("s1", "s3", "s4")])
-lower_correct_ph <- colMeans(lower_group_ph[, c("s1", "s3", "s4")])
+upper_correct_ph <- colMeans(upper_group_ph[, c("s1", "s2", "s3", "s4")])
+lower_correct_ph <- colMeans(lower_group_ph[, c("s1", "s2", "s3", "s4")])
 
 
 # Compute ULI (Upper-Lower Index)
@@ -361,7 +411,7 @@ uli_ph<-  upper_correct_ph - lower_correct_ph
 
 # Create data.frame for plotting
 data_ph <- data.frame(
-  Item = c("s1", "s3", "s4"),
+  Item = c("s1", "s2", "s3", "s4"),
   ULI = uli_ph
 )
 
@@ -384,7 +434,43 @@ ggplot(data_ph, aes(x = Item, y = ULI)) +
 ggsave("kap_ph_ULI_plot.png", width = 10, height = 6, dpi = 300)
 
 
+```
 
+```{r}
+library(dplyr)
+
+
+kap_ph_raw <- read.csv("C:/Users/abrar/OneDrive - University of Illinois - Urbana/Documents/Abrar Hussain/Ph.D/Ph.D. Papers/As Authors/KAP (Metanalysis)/Qualitative Part/Selected Question Responses for IRT/CSV/public health professionals.csv")
+
+# clean item names
+items_clean <- gsub("beta ", "", names(betas_ph))
+
+# get question text
+questions <- names(kap_ph_raw)[2:5]
+
+question_map <- data.frame(
+  Item = paste0("s", 1:4),
+  Question = questions
+)
+
+# combine beta normalized and uli raw
+final_ph <- data.frame(
+  Item = items_clean,
+  Beta_raw = as.numeric(betas_ph),
+  Beta_norm = betas_ph_normalized,
+  ULI_raw = uli_ph[items_clean]
+) %>%
+  left_join(question_map, by = "Item") %>%
+  select(Item, Question, Beta_raw, Beta_norm, ULI_raw)
+
+# export file
+out_dir <- "C:/Users/abrar/OneDrive - University of Illinois - Urbana/Documents/IRT Output"
+
+write.csv(final_ph,
+          file.path(out_dir, "PH_Final_Beta_norm_ULI_raw.csv"),
+          row.names = FALSE)
+
+final_ph
 
 ```
 
@@ -402,7 +488,7 @@ names(kap_mp)[2:11] <- paste0("Q", 1:10)  # Assuming Q1–Q10
 # Scoring logic
 kap_mp$s1 <- ifelse(grepl("Scalp|Neck|Chest|Armpit|Abdomen|Groin|Knee|Calf", kap_mp$Q1, ignore.case = TRUE), 1, 0)
 kap_mp$s2 <- ifelse(grepl("Forested_areas|Prairie_grasslands|Marshlands_swamps", kap_mp$Q2, ignore.case = TRUE), 1, 0)
-kap_mp$s3 <- ifelse(grepl("Fever|chills|Body_aches|joint pain|Rash|Fatigue", kap_mp$Q3, ignore.case = TRUE), 1, 0)
+kap_mp$s3 <- ifelse(grepl("cough", kap_mp$Q3, ignore.case = TRUE), 1, 0)
 kap_mp$s4 <- ifelse(grepl("yes", kap_mp$Q4, ignore.case = TRUE), 1, 0)
 kap_mp$s5 <- ifelse(grepl("yes", kap_mp$Q5, ignore.case = TRUE), 1, 0)
 kap_mp$s6 <- ifelse(grepl("Days", kap_mp$Q6, ignore.case = TRUE), 1, 0)
@@ -428,7 +514,7 @@ write.csv(kap_mp, "kap_mp_IRTScored.csv", row.names = FALSE)
 ##Getting beta values from Rasch model (simple) to asses the difficulty of questions
 
 #select only cleaned answers for analysis
-kap_mp_irt=dplyr::select(kap_mp,s1,s2,s3,s5,s6,s7,s8,s9,s10)
+kap_mp_irt=dplyr::select(kap_mp,s1,s2,s3,s4,s5,s6,s7,s8,s9,s10)
 
 #s4 has been removed because of its nature (opinion based question)
 
@@ -535,6 +621,24 @@ cat("Correlation between Rasch and 3PL item difficulties for ph:", round(cor_ras
 # 2PL offers a balance of interpretability and model flexibility for this 10-item dataset.
 
 #_____
+
+
+##supplementary outputs: medical professionals## 
+all_fit_tables[["MP"]] <- extract_fit_stats(
+  group = "Medical professionals",
+  rasch_mod = kap_mp_rasch,
+  pl2_mod = kap_mp_2pl,
+  pl3_mod = kap_mp_3pl,
+  selected_model = "2PL"
+)
+
+all_param_tables[["MP"]] <- extract_param_table(
+  model = kap_mp_2pl,
+  group = "Medical professionals",
+  model_name = "2PL"
+)
+
+#___
 
 ##Item Analysis & Visualization
 
@@ -702,8 +806,8 @@ lower_threshold_mp <- quantile(kap_mp$score_total, 0.27)
 upper_group_mp <- kap_mp[kap_mp$score_total >= upper_threshold_mp, ]
 lower_group_mp <- kap_mp[kap_mp$score_total <= lower_threshold_mp, ]
 
-upper_correct_mp <- colMeans(upper_group_mp[, c("s1","s2","s3","s5","s6","s7","s8","s9","s10")])
-lower_correct_mp <- colMeans(lower_group_mp[, c("s1","s2","s3","s5","s6","s7","s8","s9","s10")])
+upper_correct_mp <- colMeans(upper_group_mp[, c("s1","s2","s3","s4","s5","s6","s7","s8","s9","s10")])
+lower_correct_mp <- colMeans(lower_group_mp[, c("s1","s2","s3","s4","s5","s6","s7","s8","s9","s10")])
 
 uli_mp_normalized <- (upper_correct_mp - lower_correct_mp) / (upper_correct_mp + lower_correct_mp)
 
@@ -711,7 +815,7 @@ uli_mp <-  upper_correct_mp - lower_correct_mp
 
 # Create data.frame for plotting
 data_mp <- data.frame(
-  Item = c("s1","s2","s3","s5","s6","s7","s8","s9","s10"),
+  Item = c("s1","s2","s3","s4","s5","s6","s7","s8","s9","s10"),
   ULI = uli_mp
 )
 
@@ -734,7 +838,37 @@ ggplot(data_mp, aes(x = Item, y = ULI)) +
 ggsave("kap_mp_ULI_plot.png", width = 10, height = 6, dpi = 300)
 
 ```
+```{r}
+library(dplyr)
 
+items_clean <- gsub("beta ", "", names(betas_mp))
+
+kap_mp_raw <- read.csv("C:/Users/abrar/OneDrive - University of Illinois - Urbana/Documents/Abrar Hussain/Ph.D/Ph.D. Papers/As Authors/KAP (Metanalysis)/Qualitative Part/Selected Question Responses for IRT/CSV/medical professionals.csv")
+
+questions <- names(kap_mp_raw)[2:11]
+
+question_map <- data.frame(
+  Item = paste0("s", 1:10),
+  Question = questions
+)
+
+final_mp <- data.frame(
+  Item = items_clean,
+  Beta_raw = as.numeric(betas_mp),
+  Beta_norm = betas_mp_normalized,
+  ULI_raw = uli_mp[items_clean]
+) %>%
+  left_join(question_map, by = "Item") %>%
+  select(Item, Question, Beta_raw, Beta_norm, ULI_raw)
+
+out_dir <- "C:/Users/abrar/OneDrive - University of Illinois - Urbana/Documents/IRT Output"
+
+write.csv(final_mp,
+          file.path(out_dir, "MP_Final_Beta_norm_ULI_raw.csv"),
+          row.names = FALSE)
+
+final_mp
+```
 
 **Veterinary Professionals**
 ```{r, message=FALSE, warning=FALSE}
@@ -744,7 +878,7 @@ kap_vp <- read.csv("C:/Users/abrar/OneDrive - University of Illinois - Urbana/Do
 
 # Rename columns for easier access
 names(kap_vp)[1] <- "Pin"  # Assuming column 1 is the unique ID
-names(kap_vp)[2:13] <- paste0("Q", 1:12)  # Assuming Q1–Q12 
+names(kap_vp)[2:12] <- paste0("Q", 1:11)  # Assuming Q1–Q12 
 
 # Scoring logic
 kap_vp$s1 <- ifelse(grepl("Under_the_arms|In_hair|Behind_the_ears|Inside_the_belly_button|Wrists|Back_of_the_knees|Between_the_legs|Shoulders|Around_the_waist", kap_vp$Q1, ignore.case = TRUE), 1, 0)
@@ -758,11 +892,10 @@ kap_vp$s8 <- ifelse(grepl("yes", kap_vp$Q8, ignore.case = TRUE), 1, 0)
 kap_vp$s9 <- ifelse(grepl("yes", kap_vp$Q9, ignore.case = TRUE), 1, 0)
 kap_vp$s10 <- ifelse(grepl("yes", kap_vp$Q10, ignore.case = TRUE), 1, 0)
 kap_vp$s11 <- ifelse(grepl("yes", kap_vp$Q11, ignore.case = TRUE), 1, 0)
-kap_vp$s12 <- ifelse(grepl("Flyers|Verbally|Website", kap_vp$Q12, ignore.case = TRUE), 1, 0)
 
 
 # Total score (summing binary scores)
-kap_vp$score_total <- rowSums(kap_vp[, paste0("s", 1:12)])
+kap_vp$score_total <- rowSums(kap_vp[, paste0("s", 1:11)])
 
 #Set directory to save all outputs
 setwd("C:/Users/abrar/OneDrive - University of Illinois - Urbana/Documents/IRT Output")
@@ -777,7 +910,7 @@ write.csv(kap_vp, "kap_vp_IRTScored.csv", row.names = FALSE)
 ##Getting beta values from Rasch model (simple) to asses the difficulty of questions
 
 #select only cleaned answers for analysis
-kap_vp_irt=dplyr::select(kap_vp,s1,s2,s3,s4,s6,s7,s8,s9,s10,s11)
+kap_vp_irt=dplyr::select(kap_vp,s1,s2,s3,s4,s5,s6,s7,s8,s9,s10,s11)
 
 #s4 has been removed because of its nature (opinion based question)
 
@@ -885,6 +1018,23 @@ cat("Correlation between Rasch and 3PL item difficulties for ph:", round(cor_ras
 
 #_____
 
+
+##supplementary outputs: veterinary professionals##
+all_fit_tables[["VP"]] <- extract_fit_stats(
+  group = "Veterinary professionals",
+  rasch_mod = kap_vp_rasch,
+  pl2_mod = kap_vp_2pl,
+  pl3_mod = kap_vp_3pl,
+  selected_model = "2PL"
+)
+
+all_param_tables[["VP"]] <- extract_param_table(
+  model = kap_vp_2pl,
+  group = "Veterinary professionals",
+  model_name = "2PL"
+)
+
+#___
 ##Item Analysis & Visualization
 
 # ICC Plot
@@ -1050,8 +1200,8 @@ lower_threshold_vp <- quantile(kap_vp$score_total, 0.27)
 upper_group_vp <- kap_vp[kap_vp$score_total >= upper_threshold_vp, ]
 lower_group_vp <- kap_vp[kap_vp$score_total <= lower_threshold_vp, ]
 
-upper_correct_vp <- colMeans(upper_group_vp[, c("s1","s2","s3","s4","s6","s7","s8","s9","s10","s11")])
-lower_correct_vp <- colMeans(lower_group_vp[, c("s1","s2","s3","s4","s6","s7","s8","s9","s10","s11")])
+upper_correct_vp <- colMeans(upper_group_vp[, c("s1","s2","s3","s4","s5", "s6","s7","s8","s9","s10","s11")])
+lower_correct_vp <- colMeans(lower_group_vp[, c("s1","s2","s3","s4","s5", "s6","s7","s8","s9","s10","s11")])
 
 
 uli_vp_normalized <- (upper_correct_vp - lower_correct_vp) / (upper_correct_vp + lower_correct_vp)
@@ -1061,7 +1211,7 @@ uli_vp <-  upper_correct_vp - lower_correct_vp
 
 # Create data.frame for plotting
 data_vp <- data.frame(
-  Item = c("s1","s2","s3","s4","s6","s7","s8","s9","s10","s11"),
+  Item = c("s1","s2","s3","s4","s5","s6","s7","s8","s9","s10","s11"),
   ULI = uli_vp
 )
 
@@ -1086,6 +1236,39 @@ ggsave("kap_vp_ULI_plot.png", width = 10, height = 6, dpi = 300)
 
 ```
 
+```{r}
+library(dplyr)
+
+items_clean <- gsub("beta ", "", names(betas_vp))
+
+kap_vp_raw <- read.csv("C:/Users/abrar/OneDrive - University of Illinois - Urbana/Documents/Abrar Hussain/Ph.D/Ph.D. Papers/As Authors/KAP (Metanalysis)/Qualitative Part/Selected Question Responses for IRT/CSV/veterinary professionals.csv")
+
+questions <- names(kap_vp_raw)[2:12]
+
+question_map <- data.frame(
+  Item = paste0("s", 1:11),
+  Question = questions
+)
+
+final_vp <- data.frame(
+  Item = items_clean,
+  Beta_raw = as.numeric(betas_vp),
+  Beta_norm = betas_vp_normalized,
+  ULI_raw = uli_vp[items_clean]
+) %>%
+  left_join(question_map, by = "Item") %>%
+  select(Item, Question, Beta_raw, Beta_norm, ULI_raw)
+
+out_dir <- "C:/Users/abrar/OneDrive - University of Illinois - Urbana/Documents/IRT Output"
+
+write.csv(final_vp,
+          file.path(out_dir, "VP_Final_Beta_norm_ULI_raw.csv"),
+          row.names = FALSE)
+
+final_vp
+```
+
+
 **Extension Workers**
 ```{r, message=FALSE, warning=FALSE}
 ##Data Preparation & Scoring
@@ -1094,7 +1277,7 @@ kap_ew <- read.csv("C:/Users/abrar/OneDrive - University of Illinois - Urbana/Do
 
 # Rename columns for easier access
 names(kap_ew)[1] <- "Pin"  # Assuming column 1 is the unique ID
-names(kap_ew)[2:31] <- paste0("Q", 1:30)  # Assuming Q1–Q30 
+names(kap_ew)[2:25] <- paste0("Q", 1:24)  # Assuming Q1–Q30 
 
 # Scoring logic
 kap_ew$s1 <- ifelse(grepl("A lot|Some", kap_ew$Q1, ignore.case = TRUE), 1, 0)
@@ -1106,31 +1289,25 @@ kap_ew$s6 <- ifelse(grepl("Yes|Maybe", kap_ew$Q6, ignore.case = TRUE), 1, 0)
 kap_ew$s7 <- ifelse(grepl("Yes|Maybe", kap_ew$Q7, ignore.case = TRUE), 1, 0)
 kap_ew$s8 <- ifelse(grepl("Lyme disease|Rocky Mountain Spotted fever|Tularemia|RMSF|Alpha Gal|Alpha Gal Syndrome|Ehrlichiosis|Anaplasmosis|Babesiosis", kap_ew$Q8, ignore.case = TRUE), 1, 0)
 kap_ew$s9 <- ifelse(grepl("Hair|Head|Scalp|Underarms|Groin|Back|Toes|Elbows|Chest-Shoulder|Back of the knees|Inside the belly button|Wrists|Around the waist|Behind the ears", kap_ew$Q9, ignore.case = TRUE), 1, 0)
-kap_ew$s10 <- ifelse(grepl("From medical professional|From extension|From the veterinarian|All", kap_ew$Q10, ignore.case = TRUE), 1, 0)
-kap_ew$s11 <- ifelse(grepl("Spring months|Summer months|Autumn months|Winter months|Throughout the year", kap_ew$Q11, ignore.case = TRUE), 1, 0)
-kap_ew$s12 <- ifelse(grepl("White-tailed deer|White-footed mouse|Cats and Dogs|Humans|Birds|Livestock animals", kap_ew$Q12, ignore.case = TRUE), 1, 0)
-kap_ew$s13 <- ifelse(grepl("Fever and chills|Rash|lesions, ulcers, or other skin reactions|Headache|stiff neck|Difficulty breathing|Allergies|Pain in the joints|muscle pains|Fatigue|Other", kap_ew$Q13, ignore.case = TRUE), 1, 0)
-kap_ew$s14 <- ifelse(grepl("Through the bite of an infected tick|Through consumption of infected animal meat or animal byproducts", kap_ew$Q14, ignore.case = TRUE), 1, 0)
+kap_ew$s10 <- ifelse(grepl("Spring months|Summer months|Autumn months|Winter months|Throughout the year", kap_ew$Q10, ignore.case = TRUE), 1, 0)
+kap_ew$s11 <- ifelse(grepl("White-tailed deer|White-footed mouse|Cats and Dogs|Humans|Birds|Livestock animals", kap_ew$Q11, ignore.case = TRUE), 1, 0)
+kap_ew$s12 <- ifelse(grepl("Fever and chills|Rash|lesions, ulcers, or other skin reactions|Headache|stiff neck|Difficulty breathing|Allergies|Pain in the joints|muscle pains|Fatigue|Other", kap_ew$Q12, ignore.case = TRUE), 1, 0)
+kap_ew$s13 <- ifelse(grepl("Through the bite of an infected tick|Through consumption of infected animal meat or animal byproducts", kap_ew$Q13, ignore.case = TRUE), 1, 0)
+kap_ew$s14 <- ifelse(grepl("Yes|Maybe", kap_ew$Q14, ignore.case = TRUE), 1, 0)
 kap_ew$s15 <- ifelse(grepl("Yes|Maybe", kap_ew$Q15, ignore.case = TRUE), 1, 0)
 kap_ew$s16 <- ifelse(grepl("Yes|Maybe", kap_ew$Q16, ignore.case = TRUE), 1, 0)
 kap_ew$s17 <- ifelse(grepl("Yes|Maybe", kap_ew$Q17, ignore.case = TRUE), 1, 0)
-kap_ew$s18 <- ifelse(grepl("Yes|Maybe", kap_ew$Q18, ignore.case = TRUE), 1, 0)
-kap_ew$s19 <- ifelse(grepl("Hiking|Gardening, farming and various agricultural activities|Playing with pets outside|hunting|Walking outdoors|Mushroom hunting|Other", kap_ew$Q19, ignore.case = TRUE), 1, 0)
-kap_ew$s20 <- ifelse(grepl("Very concerned|concerned|mildly concerned", kap_ew$Q20, ignore.case = TRUE), 1, 0)
+kap_ew$s18 <- ifelse(grepl("Hiking|Gardening, farming and various agricultural activities|Playing with pets outside|hunting|Walking outdoors|Mushroom hunting|Other", kap_ew$Q18, ignore.case = TRUE), 1, 0)
+kap_ew$s19 <- ifelse(grepl("Very concerned|concerned|mildly concerned", kap_ew$Q19, ignore.case = TRUE), 1, 0)
+kap_ew$s20 <- ifelse(grepl("Yes|Maybe", kap_ew$Q20, ignore.case = TRUE), 1, 0)
 kap_ew$s21 <- ifelse(grepl("Yes|Maybe", kap_ew$Q21, ignore.case = TRUE), 1, 0)
-kap_ew$s22 <- ifelse(grepl("Yes|Maybe", kap_ew$Q22, ignore.case = TRUE), 1, 0)
-kap_ew$s23 <- ifelse(grepl("Yes|Maybe", kap_ew$Q23, ignore.case = TRUE), 1, 0)
-kap_ew$s24 <- ifelse(grepl("Yes|Maybe", kap_ew$Q24, ignore.case = TRUE), 1, 0)
-kap_ew$s25 <- ifelse(grepl("Use tick repellant on self|Wear light-colored clothing|Wear hat/cap|Wear long-sleeved shirts and long pants|Tuck pants into boots|Wear permethrin-treated clothing|Other|Check yourself|Avoiding areas", kap_ew$Q25, ignore.case = TRUE), 1, 0)
-kap_ew$s26 <- ifelse(grepl("Consult healthcare professional|Flush the tick|Use an object to remove ticks|Use alcohol|Take a photo of the tick", kap_ew$Q26, ignore.case = TRUE), 1, 0)
-kap_ew$s27 <- ifelse(grepl("Consult healthcare professional|Flush the tick|Use an object to remove ticks|Use alcohol|Take a phot|Freeze the tick|Store in container with alcohol|Throw away tick|Flush tick in toilet", kap_ew$Q27, ignore.case = TRUE), 1, 0)
-kap_ew$s28 <- ifelse(grepl("^\\s*\\d+\\s*$", kap_ew$Q28), 1, 0)
-kap_ew$s29 <- ifelse(grepl("Yes|Maybe|No", kap_ew$Q29, ignore.case = TRUE), 1, 0)
-kap_ew$s30 <- ifelse(grepl("Yes|Maybe|No", kap_ew$Q30, ignore.case = TRUE), 1, 0)
+kap_ew$s22 <- ifelse(grepl("Use tick repellant on self|Wear light-colored clothing|Wear hat/cap|Wear long-sleeved shirts and long pants|Tuck pants into boots|Wear permethrin-treated clothing|Other|Check yourself|Avoiding areas", kap_ew$Q22, ignore.case = TRUE), 1, 0)
+kap_ew$s23 <- ifelse(grepl("Consult healthcare professional|Flush the tick|Use an object to remove ticks|Use alcohol|Take a photo of the tick", kap_ew$Q23, ignore.case = TRUE), 1, 0)
+kap_ew$s24 <- ifelse(grepl("Consult healthcare professional|Flush the tick|Use an object to remove ticks|Use alcohol|Take a phot|Freeze the tick|Store in container with alcohol|Throw away tick|Flush tick in toilet", kap_ew$Q24, ignore.case = TRUE), 1, 0)
 
 
 # Total score (summing binary scores)
-kap_ew$score_total <- rowSums(kap_ew[, paste0("s", 1:30)])
+kap_ew$score_total <- rowSums(kap_ew[, paste0("s", 1:24)])
 
 #Set directory to save all outputs
 setwd("C:/Users/abrar/OneDrive - University of Illinois - Urbana/Documents/IRT Output")
@@ -1145,7 +1322,7 @@ write.csv(kap_ew, "kap_ew_IRTScored.csv", row.names = FALSE)
 ##Getting beta values from Rasch model (simple) to asses the difficulty of questions
 
 #select only cleaned answers for analysis
-kap_ew_irt=dplyr::select(kap_ew,s1,s2,s3,s4,s5,s6,s7,s8,s9,s11,s12,s13,s14,s16,s17,s18,s19,s20,s23,s24,s25,s26,s27)
+kap_ew_irt=dplyr::select(kap_ew,s1,s2,s3,s4,s5,s6,s7,s8,s9,s10,s11,s12,s13,s14,s15,s16,s17,s18,s19,s20,s21,s22,s23,s24)
 
 #s15,s20,s21,s28,s29,s30 removed because of the nature of questions (opinion based)
 
@@ -1256,6 +1433,23 @@ cat("Correlation between Rasch and 3PL item difficulties for ph:", round(cor_ras
 
 #_____
 
+## supplementary outputs: extension workers ##
+all_fit_tables[["EW"]] <- extract_fit_stats(
+  group = "Extension workers",
+  rasch_mod = kap_ew_rasch,
+  pl2_mod = kap_ew_2pl,
+  pl3_mod = kap_ew_3pl,
+  selected_model = "2PL"
+)
+
+all_param_tables[["EW"]] <- extract_param_table(
+  model = kap_ew_2pl,
+  group = "Extension workers",
+  model_name = "2PL"
+)
+
+
+#_____
 ##Item Analysis & Visualization
 
 # ICC Plot
@@ -1422,8 +1616,8 @@ lower_threshold_ew <- quantile(kap_ew$score_total, 0.27)
 upper_group_ew <- kap_ew[kap_ew$score_total >= upper_threshold_ew, ]
 lower_group_ew <- kap_ew[kap_ew$score_total <= lower_threshold_ew, ]
 
-upper_correct_ew <- colMeans(upper_group_ew[,c("s1","s2","s3","s4","s5","s6","s7","s8","s9","s11","s12","s13","s14","s16","s17","s18","s19","s20","s23","s24","s25","s26","s27")])
-lower_correct_ew <- colMeans(lower_group_ew[,c("s1","s2","s3","s4","s5","s6","s7","s8","s9","s11","s12","s13","s14","s16","s17","s18","s19","s20","s23","s24","s25","s26","s27")])
+upper_correct_ew <- colMeans(upper_group_ew[,c("s1","s2","s3","s4","s5","s6","s7","s8","s9","s10","s11","s12","s13","s14","s15","s16","s17","s18","s19","s20","s21","s22","s23","s24")])
+lower_correct_ew <- colMeans(lower_group_ew[,c("s1","s2","s3","s4","s5","s6","s7","s8","s9","s10","s11","s12","s13","s14","s15","s16","s17","s18","s19","s20","s21","s22","s23","s24")])
 
 uli_ew_normailized <- (upper_correct_ew - lower_correct_ew) / (upper_correct_ew + lower_correct_ew)
 
@@ -1431,7 +1625,7 @@ uli_ew <-  upper_correct_ew - lower_correct_ew
 
 # Create data.frame for plotting
 data_ew <- data.frame(
-  Item = c("s1","s2","s3","s4","s5","s6","s7","s8","s9","s11","s12","s13","s14","s16","s17","s18","s19","s20","s23","s24","s25","s26","s27"),
+  Item = c("s1","s2","s3","s4","s5","s6","s7","s8","s9","s10","s11","s12","s13","s14","s15","s16","s17","s18","s19","s20","s21","s22","s23","s24"),
   ULI = uli_ew
 )
 
@@ -1457,6 +1651,40 @@ ggsave("kap_ew_ULI_plot.png", width = 10, height = 6, dpi = 300)
 ```
 
 
+```{r}
+library(dplyr)
+
+items_clean <- gsub("beta ", "", names(betas_ew))
+
+kap_ew_raw <- read.csv("C:/Users/abrar/OneDrive - University of Illinois - Urbana/Documents/Abrar Hussain/Ph.D/Ph.D. Papers/As Authors/KAP (Metanalysis)/Qualitative Part/Selected Question Responses for IRT/CSV/extension workers.csv")
+
+questions <- names(kap_ew_raw)[2:25]
+
+question_map <- data.frame(
+  Item = paste0("s", 1:24),
+  Question = questions
+)
+
+final_ew <- data.frame(
+  Item = items_clean,
+  Beta_raw = as.numeric(betas_ew),
+  Beta_norm = betas_ew_normalized,
+  ULI_raw = uli_ew[items_clean]
+) %>%
+  left_join(question_map, by = "Item") %>%
+  select(Item, Question, Beta_raw, Beta_norm, ULI_raw)
+
+out_dir <- "C:/Users/abrar/OneDrive - University of Illinois - Urbana/Documents/IRT Output"
+
+write.csv(final_ew,
+          file.path(out_dir, "EW_Final_Beta_norm_ULI_raw.csv"),
+          row.names = FALSE)
+
+final_ew
+```
+
+
+
 **Farmers**
 ```{r, message=FALSE, warning=FALSE}
 ##Data Preparation & Scoring
@@ -1465,7 +1693,7 @@ kap_f <- read.csv("C:/Users/abrar/OneDrive - University of Illinois - Urbana/Doc
 
 # Rename columns for easier access
 names(kap_f)[1] <- "Pin"  # Assuming column 1 is the unique ID
-names(kap_f)[2:35] <- paste0("Q", 1:34)  # Assuming Q1–Q34 
+names(kap_f)[2:29] <- paste0("Q", 1:28)  # Assuming Q1–Q28 
 
 # Scoring logic
 kap_f$s1 <- ifelse(grepl("Moderate|High", kap_f$Q1, ignore.case = TRUE), 1, 0)
@@ -1478,34 +1706,30 @@ kap_f$s7 <- ifelse(grepl("Yes|Maybe", kap_f$Q7, ignore.case = TRUE), 1, 0)
 kap_f$s8 <- ifelse(grepl("Yes|Maybe", kap_f$Q8, ignore.case = TRUE), 1, 0)
 kap_f$s9 <- ifelse(grepl("Lyme disease|Rocky Mountain Spotted fever|Tularemia|RMSF|Alpha Gal|Alpha Gal Syndrome|Ehrlichiosis|Anaplasmosis|Babesiosis", kap_f$Q9, ignore.case = TRUE), 1, 0)
 kap_f$s10 <- ifelse(grepl("Hair|Head|Scalp|Underarms|Groin|Back|Toes|Elbows|Chest-Shoulder|Back of the knees|Inside the belly button|Wrists|Around the waist|Behind the ears", kap_f$Q10, ignore.case = TRUE), 1, 0)
-kap_f$s11 <- ifelse(grepl("From medical professional|From extension|From the veterinarian|All", kap_f$Q11, ignore.case = TRUE), 1, 0)
-kap_f$s12 <- ifelse(grepl("Yes|Maybe", kap_f$Q12, ignore.case = TRUE), 1, 0)
-kap_f$s13 <- ifelse(grepl("In the grass|In the forest|Along the sides of trails|On animal's skin or coat|Edges of cattle pasture/fence rows", kap_f$Q13, ignore.case = TRUE), 1, 0)
-kap_f$s14 <- ifelse(grepl("Spring months|Summer months|Autumn months|Winter months|Throughout the year", kap_f$Q14, ignore.case = TRUE), 1, 0)
-kap_f$s15 <- ifelse(grepl("White-tailed deer|White-footed mouse|Cats & Dogs|Humans|Birds|Livestock animals", kap_f$Q15, ignore.case = TRUE), 1, 0)
-kap_f$s16 <- ifelse(grepl("Fever and chills|Rash|lesions, ulcers, or other skin reactions|Headache|stiff neck|Difficulty breathing|Allergies|Pain in the joints|muscle pains|Fatigue|Other", kap_f$Q16, ignore.case = TRUE), 1, 0)
-kap_f$s17 <- ifelse(grepl("Through the bite of an infected tick|Through consumption of infected animal meat or animal byproducts", kap_f$Q17, ignore.case = TRUE), 1, 0)
+kap_f$s11 <- ifelse(grepl("Yes|Maybe", kap_f$Q11, ignore.case = TRUE), 1, 0)
+kap_f$s12 <- ifelse(grepl("In the grass|In the forest|Along the sides of trails|On animal's skin or coat|Edges of cattle pasture/fence rows", kap_f$Q12, ignore.case = TRUE), 1, 0)
+kap_f$s13 <- ifelse(grepl("Spring months|Summer months|Autumn months|Winter months|Throughout the year", kap_f$Q13, ignore.case = TRUE), 1, 0)
+kap_f$s14 <- ifelse(grepl("White-tailed deer|White-footed mouse|Cats & Dogs|Humans|Birds|Livestock animals", kap_f$Q14, ignore.case = TRUE), 1, 0)
+kap_f$s15 <- ifelse(grepl("Fever and chills|Rash|lesions, ulcers, or other skin reactions|Headache|stiff neck|Difficulty breathing|Allergies|Pain in the joints|muscle pains|Fatigue|Other", kap_f$Q15, ignore.case = TRUE), 1, 0)
+kap_f$s16 <- ifelse(grepl("Through the bite of an infected tick|Through consumption of infected animal meat or animal byproducts", kap_f$Q16, ignore.case = TRUE), 1, 0)
+kap_f$s17 <- ifelse(grepl("Yes|Maybe", kap_f$Q17, ignore.case = TRUE), 1, 0)
 kap_f$s18 <- ifelse(grepl("Yes|Maybe", kap_f$Q18, ignore.case = TRUE), 1, 0)
 kap_f$s19 <- ifelse(grepl("Yes|Maybe", kap_f$Q19, ignore.case = TRUE), 1, 0)
-kap_f$s20 <- ifelse(grepl("Yes|Maybe", kap_f$Q20, ignore.case = TRUE), 1, 0)
-kap_f$s21 <- ifelse(grepl("11-24 hours|24 hours", kap_f$Q21, ignore.case = TRUE), 1, 0)
+kap_f$s20 <- ifelse(grepl("11-24 hours|24 hours", kap_f$Q20, ignore.case = TRUE), 1, 0)
+kap_f$s21 <- ifelse(grepl("Yes|Maybe", kap_f$Q21, ignore.case = TRUE), 1, 0)
 kap_f$s22 <- ifelse(grepl("Yes|Maybe", kap_f$Q22, ignore.case = TRUE), 1, 0)
-kap_f$s23 <- ifelse(grepl("Yes|Maybe", kap_f$Q23, ignore.case = TRUE), 1, 0)
-kap_f$s24 <- ifelse(grepl("Very concerned|concerned|mildly concerned", kap_f$Q24, ignore.case = TRUE), 1, 0)
-kap_f$s25 <- ifelse(grepl("Yes|Maybe", kap_f$Q25, ignore.case = TRUE), 1, 0)
-kap_f$s26 <- ifelse(grepl("Yes|Maybe", kap_f$Q26, ignore.case = TRUE), 1, 0)
-kap_f$s27 <- ifelse(grepl("Use tick repellant on self|Wear light-colored clothing|Wear hat/cap|Wear long-sleeved shirts and long pants|Tuck pants into boots|Wear permethrin-treated clothing|Other|Check yourself|Avoiding areas", kap_f$Q27, ignore.case = TRUE), 1, 0)
-kap_f$s28 <- ifelse(grepl("Applied once|Usually apply|Always apply|Sometimes apply tick", kap_f$Q28, ignore.case = TRUE), 1, 0)
-kap_f$s29 <- ifelse(grepl("Consult healthcare professional|Use an object to remove ticks|Use alcohol|Take a photo of the tick", kap_f$Q29, ignore.case = TRUE), 1, 0)
-kap_f$s30 <- ifelse(grepl("Consult healthcare professional|Use an object to remove ticks|Use alcohol|Take a phot|Freeze the tick|Store in container with alcohol|Throw away tick|Flush tick in toilet", kap_f$Q30, ignore.case = TRUE), 1, 0)
-kap_f$s31 <- ifelse(grepl("Yes|Maybe", kap_f$Q31, ignore.case = TRUE), 1, 0)
-kap_f$s32 <- ifelse(grepl("^\\s*\\d+\\s*$", kap_f$Q32), 1, 0)
-kap_f$s33 <- ifelse(grepl("Yes|Maybe|No", kap_f$Q33, ignore.case = TRUE), 1, 0)
-kap_f$s34 <- ifelse(grepl("Yes|Maybe|No", kap_f$Q34, ignore.case = TRUE), 1, 0)
+kap_f$s23 <- ifelse(grepl("Very concerned|concerned|mildly concerned", kap_f$Q23, ignore.case = TRUE), 1, 0)
+
+kap_f$s24 <- ifelse(grepl("Use tick repellant on self|Wear light-colored clothing|Wear hat/cap|Wear long-sleeved shirts and long pants|Tuck pants into boots|Wear permethrin-treated clothing|Other|Check yourself|Avoiding areas", kap_f$Q24, ignore.case = TRUE), 1, 0)
+kap_f$s25 <- ifelse(grepl("Applied once|Usually apply|Always apply|Sometimes apply tick", kap_f$Q25, ignore.case = TRUE), 1, 0)
+kap_f$s26 <- ifelse(grepl("Consult healthcare professional|Use an object to remove ticks|Use alcohol|Take a photo of the tick", kap_f$Q26, ignore.case = TRUE), 1, 0)
+kap_f$s27 <- ifelse(grepl("Consult healthcare professional|Use an object to remove ticks|Use alcohol|Take a phot|Freeze the tick|Store in container with alcohol|Throw away tick|Flush tick in toilet",                        kap_f$Q27, ignore.case = TRUE), 1, 0)
+kap_f$s28 <- ifelse(grepl("Yes|Maybe", kap_f$Q28, ignore.case = TRUE), 1, 0)
+
 
 
 # Total score (summing binary scores)
-kap_f$score_total <- rowSums(kap_f[, paste0("s", 1:30)])
+kap_f$score_total <- rowSums(kap_f[, paste0("s", 1:28)])
 
 #Set directory to save all outputs
 setwd("C:/Users/abrar/OneDrive - University of Illinois - Urbana/Documents/IRT Output")
@@ -1520,7 +1744,7 @@ write.csv(kap_f, "kap_f_IRTScored.csv", row.names = FALSE)
 ##Getting beta values from Rasch model (simple) to asses the difficulty of questions
 
 #select only cleaned answers for analysis
-kap_f_irt=dplyr::select(kap_f,s1,s2,s3,s4,s5,s6,s7,s8,s9,s10,s13,s14,s15,s16,s17,s19,s20,s21,s22,s23,s24,s27,s28,s29,s30,s31)
+kap_f_irt=dplyr::select(kap_f,s1,s2,s3,s4,s5,s6,s7,s8,s9,s10,s11,s12,s13,s14,s15,s16,s17,s18,s19,s20,s21,s22,s23,s24,s25,s26,s27,s28)
 
 #s18,s25,s26,s32,s33,s34 removed because of nature of the questions (opinion based)
 
@@ -1635,6 +1859,24 @@ cat("Correlation between Rasch and 3PL item difficulties for ph:", round(cor_ras
 
 #_____
 
+
+##supplementary outputs: farmers##
+all_fit_tables[["F"]] <- extract_fit_stats(
+  group = "Farmers",
+  rasch_mod = kap_f_rasch,
+  pl2_mod = kap_f_2pl,
+  pl3_mod = kap_f_3pl,
+  selected_model = "Rasch"
+)
+
+all_param_tables[["F"]] <- extract_param_table(
+  model = kap_f_rasch,
+  group = "Farmers",
+  model_name = "Rasch"
+)
+
+
+#_____
 ##Item Analysis & Visualization
 
 # ICC Plot
@@ -1801,10 +2043,8 @@ lower_threshold_f <- quantile(kap_f$score_total, 0.27)
 upper_group_f <- kap_f[kap_f$score_total >= upper_threshold_f, ]
 lower_group_f <- kap_f[kap_f$score_total <= lower_threshold_f, ]
 
-upper_correct_f <- colMeans(upper_group_f[,c("s1","s2","s3","s4","s5","s6","s7","s8","s9","s10","s13","s14","s15","s16","s17","s19","s20","s21","s22","s23","s24","s27","s28","s29","s30","s31"
-)])
-lower_correct_f <- colMeans(lower_group_f[,c("s1","s2","s3","s4","s5","s6","s7","s8","s9","s10","s13","s14","s15","s16","s17","s19","s20","s21","s22","s23","s24","s27","s28","s29","s30","s31"
-)])
+upper_correct_f <- colMeans(upper_group_f[,c("s1","s2","s3","s4","s5","s6","s7","s8","s9","s10","s11","s12","s13","s14","s15","s16","s17","s18","s19","s20","s21","s22","s23","s24","s25","s26","s27","s28")])
+lower_correct_f <- colMeans(lower_group_f[,c("s1","s2","s3","s4","s5","s6","s7","s8","s9","s10","s11","s12","s13","s14","s15","s16","s17","s18","s19","s20","s21","s22","s23","s24","s25","s26","s27","s28")])
 
 uli_f_normailized <- (upper_correct_f - lower_correct_f) / (upper_correct_f + lower_correct_f)
 
@@ -1812,7 +2052,7 @@ uli_f <-  upper_correct_f - lower_correct_f
 
 # Create data.frame for plotting
 data_f <- data.frame(
-  Item = c("s1","s2","s3","s4","s5","s6","s7","s8","s9","s10","s13","s14","s15","s16","s17","s19","s20","s21","s22","s23","s24","s27","s28","s29","s30","s31"),
+  Item = c("s1","s2","s3","s4","s5","s6","s7","s8","s9","s10","s11","s12","s13","s14","s15","s16","s17","s18","s19","s20","s21","s22","s23","s24","s25","s26","s27","s28"),
   ULI = uli_f
 )
 
@@ -1838,4 +2078,105 @@ ggsave("kap_f_ULI_plot.png", width = 10, height = 6, dpi = 300)
 ```
 
 
+```{r}
+library(dplyr)
 
+items_clean <- gsub("beta ", "", names(betas_f))
+
+kap_f_raw <- read.csv("C:/Users/abrar/OneDrive - University of Illinois - Urbana/Documents/Abrar Hussain/Ph.D/Ph.D. Papers/As Authors/KAP (Metanalysis)/Qualitative Part/Selected Question Responses for IRT/CSV/farmers.csv")
+
+questions <- names(kap_f_raw)[2:29]
+
+question_map <- data.frame(
+  Item = paste0("s", 1:28),
+  Question = questions
+)
+
+final_f <- data.frame(
+  Item = items_clean,
+  Beta_raw = as.numeric(betas_f),
+  Beta_norm = betas_f_normalized,
+  ULI_raw = uli_f[items_clean]
+) %>%
+  left_join(question_map, by = "Item") %>%
+  select(Item, Question, Beta_raw, Beta_norm, ULI_raw)
+
+out_dir <- "C:/Users/abrar/OneDrive - University of Illinois - Urbana/Documents/IRT Output"
+
+write.csv(final_f,
+          file.path(out_dir, "F_Final_Beta_norm_ULI_raw.csv"),
+          row.names = FALSE)
+
+final_f
+```
+
+
+# COMBINE AND EXPORT SUPPLEMENTARY TABLES
+```{r}
+
+out_dir <- "C:/Users/abrar/OneDrive - University of Illinois - Urbana/Documents/IRT Output"
+
+supp_table_S5 <- dplyr::bind_rows(all_fit_tables)
+supp_table_S6 <- dplyr::bind_rows(all_param_tables)
+
+write.csv(supp_table_S5,
+          file.path(out_dir, "Supplementary_Table_S5_Model_Fit_Statistics.csv"),
+          row.names = FALSE)
+
+write.csv(supp_table_S6,
+          file.path(out_dir, "Supplementary_Table_S6_Selected_Model_Parameters_SE.csv"),
+          row.names = FALSE)
+
+print(supp_table_S5)
+print(head(supp_table_S6))
+
+```
+
+
+```{r}
+
+library(magick)
+
+out_dir <- "C:/Users/abrar/OneDrive - University of Illinois - Urbana/Documents/IRT Output"
+
+# ---------- ICC PANEL ----------
+icc_files <- c(
+  file.path(out_dir, "kap_ph_ICC_plot.png"),
+  file.path(out_dir, "kap_mp_ICC_plot.png"),
+  file.path(out_dir, "kap_vp_ICC_plot.png"),
+  file.path(out_dir, "kap_ew_ICC_plot.png"),
+  file.path(out_dir, "kap_f_ICC_plot.png")
+)
+
+icc_imgs <- lapply(icc_files, image_read)
+icc_imgs <- lapply(icc_imgs, function(x) image_resize(x, "1600x1200!"))
+
+icc_row1 <- image_append(c(icc_imgs[[1]], icc_imgs[[2]]))
+icc_row2 <- image_append(c(icc_imgs[[3]], icc_imgs[[4]]))
+icc_row3 <- image_append(c(icc_imgs[[5]], image_blank(width = 1600, height = 1200, color = "white")))
+
+icc_panel <- image_append(c(icc_row1, icc_row2, icc_row3), stack = TRUE)
+image_write(icc_panel, path = file.path(out_dir, "Figure_S_ICC_all_groups.png"), format = "png")
+
+# ---------- PERSON-ITEM MAP PANEL ----------
+map_files <- c(
+  file.path(out_dir, "kap_ph_PersonItem_map.png"),
+  file.path(out_dir, "kap_mp_PersonItem_map.png"),
+  file.path(out_dir, "kap_vp_PersonItem_map.png"),
+  file.path(out_dir, "kap_ew_PersonItem_map.png"),
+  file.path(out_dir, "kap_f_PersonItem_map.png")
+)
+
+map_imgs <- lapply(map_files, image_read)
+map_imgs <- lapply(map_imgs, function(x) image_resize(x, "1600x1200!"))
+
+map_row1 <- image_append(c(map_imgs[[1]], map_imgs[[2]]))
+map_row2 <- image_append(c(map_imgs[[3]], map_imgs[[4]]))
+map_row3 <- image_append(c(map_imgs[[5]], image_blank(width = 1600, height = 1200, color = "white")))
+
+map_panel <- image_append(c(map_row1, map_row2, map_row3), stack = TRUE)
+image_write(map_panel, path = file.path(out_dir, "Figure_S_PersonItemMaps_all_groups.png"), format = "png")
+
+icc_panel
+map_panel
+```
